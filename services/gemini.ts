@@ -52,7 +52,7 @@ export const AGENT_TOOLS: Tool[] = [{
     },
     {
       name: 'searchNotes',
-      description: 'Search for notes semantically. Returns a list of notes with IDs, titles, and snippets.',
+      description: 'Search for notes semantically using embeddings. Returns a list of notes with IDs, titles, snippets, and relevance scores. Notes with score > 0.3 are considered highly relevant.',
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -125,7 +125,7 @@ export const AGENT_TOOLS: Tool[] = [{
 }];
 
 export const AGENT_SYSTEM_INSTRUCTION = `
-You are MemoGraph, an intelligent and creative knowledge assistant.
+You are Memorunia, an intelligent and creative knowledge assistant.
 You manage the user's personal notes.
 
 Capabilities:
@@ -135,6 +135,11 @@ Capabilities:
 Rules:
 - **Content Generation**: If the user asks to create a note about a topic (e.g., "Create a note with a Shawarma recipe") but does NOT provide the exact text, **YOU MUST GENERATE** high-quality, detailed content for that topic using your own knowledge, and then call 'createNote' with that generated content. Do not ask the user to provide the text if they asked you to create the note about a known topic.
 - ALWAYS 'searchNotes' first if you need to find a note to Update, Delete, or Answer from.
+- **Answering Questions**: When answering questions:
+  1. First use 'searchNotes' to find relevant notes
+  2. Then use 'ragAnswer' with the note IDs from search results
+  3. The 'ragAnswer' tool will automatically filter to only highly relevant notes
+  4. Always cite sources in your response, but ONLY cite notes that were actually used and are truly relevant
 - Ambiguity: If 'searchNotes' returns multiple similar results, ASK the user to clarify which one they mean.
 - Safety: BEFORE calling 'deleteNote', you MUST ask the user for confirmation (e.g., "Are you sure you want to delete 'Grocery List'?"). Only proceed if they say "yes".
 - Privacy: Do not invent information when answering questions *about existing notes*. If a note isn't found, say so.
@@ -177,26 +182,86 @@ export const cosineSimilarity = (vecA: number[], vecB: number[]): number => {
 
 // --- RAG Helper (Used by Agent Tool) ---
 
-export const generateAnswer = async (query: string, contextNotes: Note[]): Promise<{ answer: string, usedNoteIds: string[] }> => {
+export const generateAnswer = async (query: string, contextNotes: Note[], relevanceScores?: Map<string, number>): Promise<{ answer: string, usedNoteIds: string[] }> => {
   const ai = getAI();
-  const contextText = contextNotes.map(n => `ID: ${n.id}\nTitle: ${n.title}\nContent: ${n.content}`).join("\n\n---\n\n");
+  
+  // Filter to only highly relevant notes (score > 0.3) if scores provided
+  let relevantNotes = contextNotes;
+  if (relevanceScores && relevanceScores.size > 0) {
+    relevantNotes = contextNotes.filter(n => {
+      const score = relevanceScores.get(n.id) || 0;
+      return score > 0.3; // Only include notes with meaningful relevance
+    });
+  }
+  
+  // If no relevant notes after filtering, return early
+  if (relevantNotes.length === 0) {
+    return {
+      answer: "I couldn't find any relevant notes to answer your question. The available notes don't seem to contain information related to your query.",
+      usedNoteIds: []
+    };
+  }
+  
+  const contextText = relevantNotes.map(n => {
+    const score = relevanceScores?.get(n.id);
+    const scoreNote = score !== undefined ? ` [Relevance: ${(score * 100).toFixed(0)}%]` : '';
+    return `Title: ${n.title}${scoreNote}\nContent: ${n.content}`;
+  }).join("\n\n---\n\n");
   
   const prompt = `
   Question: "${query}"
-  Context:
+  
+  Context Notes (only use information from these notes):
   ${contextText}
   
-  Answer the question using the context. Cite sources by ID or Title.
+  Instructions:
+  - Answer the question STRICTLY using only the information from the context notes above.
+  - If the context notes don't contain enough information to answer the question, say so clearly.
+  - ALWAYS cite your sources at the end of your answer using this format:
+    
+    **Sources:**
+    - [Note Title 1]
+    - [Note Title 2]
+  
+  - Only cite notes that you actually used to answer the question.
+  - If you didn't use any notes (because they weren't relevant), don't include a Sources section.
+  - Format your answer with markdown for readability.
   `;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-2.5-flash-lite',
       contents: prompt,
     });
+    
+    // Only return notes with high relevance scores (>= 0.5) or top 3 most relevant
+    // This ensures we only show sources that are truly relevant, not just barely above threshold
+    let finalUsedNotes = relevantNotes;
+    if (relevanceScores && relevanceScores.size > 0) {
+      // Filter to only high-relevance notes (>= 0.5)
+      const highRelevanceNotes = relevantNotes.filter(n => {
+        const score = relevanceScores.get(n.id) || 0;
+        return score >= 0.5;
+      });
+      
+      // If we have high relevance notes, use those; otherwise use top 3
+      if (highRelevanceNotes.length > 0) {
+        finalUsedNotes = highRelevanceNotes;
+      } else {
+        // Sort by relevance and take top 3
+        finalUsedNotes = [...relevantNotes]
+          .sort((a, b) => {
+            const scoreA = relevanceScores.get(a.id) || 0;
+            const scoreB = relevanceScores.get(b.id) || 0;
+            return scoreB - scoreA;
+          })
+          .slice(0, 3);
+      }
+    }
+    
     return {
       answer: response.text || "No answer generated.",
-      usedNoteIds: contextNotes.map(n => n.id)
+      usedNoteIds: finalUsedNotes.map(n => n.id)
     };
   } catch (e) {
     return { answer: "Error generating answer.", usedNoteIds: [] };
@@ -214,7 +279,7 @@ export const generateClusters = async (notes: Note[]): Promise<Cluster[]> => {
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-2.5-flash-lite',
       contents: [
         { role: 'user', parts: [{ text: JSON.stringify(notesData) }] },
         { role: 'user', parts: [{ text: prompt }] }
@@ -252,7 +317,7 @@ export const editNoteContent = async (currentContent: string, instruction: strin
   const ai = getAI();
   const prompt = `Rewrite this text based on instruction: "${instruction}"\n\nText:\n${currentContent}`;
   try {
-    const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+    const response = await ai.models.generateContent({ model: 'gemini-2.5-flash-lite', contents: prompt });
     return response.text || currentContent;
   } catch (e) {
     return currentContent;

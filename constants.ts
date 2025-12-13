@@ -193,7 +193,7 @@ export const DEMO_NOTES: Omit<Note, 'embedding'>[] = [
 ];
 
 export const SYSTEM_INSTRUCTION_RAG = `
-You are MemoGraph, a personal knowledge assistant.
+You are Memorunia, a personal knowledge assistant.
 Answer the user's question STRICTLY based on the provided Context Notes.
 If the answer is not in the notes, state that clearly.
 Do not make up information.

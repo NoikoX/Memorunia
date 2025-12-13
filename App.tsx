@@ -265,13 +265,47 @@ const App: React.FC = () => {
           snippet: n.content.slice(0, 150),
           score: n.embedding ? cosineSimilarity(queryEmb, n.embedding) : 0
         })).sort((a, b) => b.score - a.score).filter(n => n.score > 0.05).slice(0, 5); // Return top 5
-        return { results };
+        
+        // Add relevance information to help agent decide which notes to use
+        const relevantResults = results.filter(r => r.score > 0.3);
+        return { 
+          results,
+          message: relevantResults.length > 0 
+            ? `Found ${results.length} notes. ${relevantResults.length} are highly relevant (score > 0.3). Use these note IDs with 'ragAnswer' for best results.`
+            : `Found ${results.length} notes, but none are highly relevant. Consider refining your search query.`
+        };
       }
 
       case 'ragAnswer': {
         const { query, candidateNoteIds } = args;
         const candidates = currentNotes.filter(n => candidateNoteIds.includes(n.id));
-        return await generateAnswer(query, candidates);
+        
+        // Calculate relevance scores for each candidate note
+        const queryEmb = await generateEmbedding(query);
+        const relevanceScores = new Map<string, number>();
+        
+        for (const note of candidates) {
+          if (note.embedding) {
+            const score = cosineSimilarity(queryEmb, note.embedding);
+            relevanceScores.set(note.id, score);
+          }
+        }
+        
+        // Only pass notes with meaningful relevance (score > 0.3)
+        const relevantCandidates = candidates.filter(n => {
+          const score = relevanceScores.get(n.id) || 0;
+          return score > 0.3;
+        });
+        
+        // If no relevant candidates, return early with a helpful message
+        if (relevantCandidates.length === 0) {
+          return {
+            answer: "I couldn't find any relevant notes to answer your question. The notes you referenced don't seem to contain information related to your query. Try searching for more relevant notes first.",
+            usedNoteIds: []
+          };
+        }
+        
+        return await generateAnswer(query, relevantCandidates, relevanceScores);
       }
 
       case 'clusterNotes': {
@@ -347,13 +381,14 @@ const App: React.FC = () => {
     try {
       let turnFinished = false;
       let loopCount = 0;
+      let sourceNoteIds: string[] | undefined; // Track source note IDs from ragAnswer calls
 
       while (!turnFinished && loopCount < 5) {
         loopCount++;
         
         // Call Gemini
         const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-2.5-flash-lite',
           contents: currentTurnMessages,
           config: {
             tools: AGENT_TOOLS,
@@ -366,7 +401,12 @@ const App: React.FC = () => {
 
         // If simple text response
         if (modelText && (!fc || fc.length === 0)) {
-           const agentMsg: ChatMessage = { id: uuidv4(), role: 'assistant', content: modelText };
+           const agentMsg: ChatMessage = { 
+             id: uuidv4(), 
+             role: 'assistant', 
+             content: modelText,
+             sourceNoteIds: sourceNoteIds // Attach source note IDs if available
+           };
            setChatHistory(prev => [...prev, agentMsg]);
            turnFinished = true;
         } 
@@ -386,6 +426,21 @@ const App: React.FC = () => {
              const result = await executeTool(call.name, call.args);
              resultsLog.push({ id: uuidv4(), name: call.name, result });
              
+             // Track source note IDs from ragAnswer (takes priority)
+             if (call.name === 'ragAnswer' && result?.usedNoteIds) {
+               sourceNoteIds = result.usedNoteIds;
+             }
+             // If searchNotes was called and no ragAnswer, use search results as sources
+             else if (call.name === 'searchNotes' && result?.results && !sourceNoteIds) {
+               // Only use highly relevant results (score > 0.3) as sources
+               const highRelevanceNoteIds = result.results
+                 .filter((r: any) => r.score > 0.3)
+                 .map((r: any) => r.id);
+               if (highRelevanceNoteIds.length > 0) {
+                 sourceNoteIds = highRelevanceNoteIds;
+               }
+             }
+             
              responses.push({
                 name: call.name,
                 response: { result: result }
@@ -400,6 +455,9 @@ const App: React.FC = () => {
            currentTurnMessages.push({ role: 'function', parts: responses.map(r => ({ functionResponse: r })) });
         }
       }
+      
+      // After the loop, if we have a final text response, check if we need to add source note IDs
+      // This will be handled when the final message is created
 
     } catch (e) {
       console.error("Agent Loop Error", e);
@@ -476,8 +534,41 @@ const App: React.FC = () => {
                     msg.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-800'
                   }`}>
                     <div className="prose prose-sm max-w-none dark:prose-invert">
-                      <ReactMarkdown>{msg.content || ''}</ReactMarkdown>
+                      <ReactMarkdown>
+                        {msg.content || ''}
+                      </ReactMarkdown>
                     </div>
+                    
+                    {/* Sources Section - Always show if sourceNoteIds exist */}
+                    {msg.role === 'assistant' && msg.sourceNoteIds && msg.sourceNoteIds.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-slate-200">
+                        <div className="flex items-center gap-2 mb-3">
+                          <FileText className="w-4 h-4 text-indigo-600" />
+                          <h4 className="text-sm font-semibold text-slate-700">Sources</h4>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {msg.sourceNoteIds.map(noteId => {
+                            const note = notes.find(n => n.id === noteId);
+                            if (!note) return null;
+                            return (
+                              <button
+                                key={noteId}
+                                onClick={() => {
+                                  setSelectedNote(note);
+                                  setIsCreatingNewNote(false);
+                                  setModalInitialEditMode(false);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-medium transition-colors border border-indigo-200 hover:border-indigo-300 shadow-sm hover:shadow"
+                              >
+                                <FileText className="w-3 h-3" />
+                                {note.title}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    
                     {msg.role === 'assistant' && (
                       <div className="mt-3 flex gap-2">
                           <button 
@@ -610,7 +701,7 @@ const App: React.FC = () => {
                   <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6">
                     <BrainCircuit className="w-8 h-8 text-indigo-600" />
                   </div>
-                  <h2 className="text-2xl font-bold text-slate-800 mb-2">Welcome to MemoGraph</h2>
+                  <h2 className="text-2xl font-bold text-slate-800 mb-2">Welcome to Memorunia</h2>
                   <p className="text-slate-500 mb-6">Start by adding a note or load the demo.</p>
                   <div className="flex items-center justify-center gap-3">
                     <button 
@@ -819,6 +910,11 @@ const App: React.FC = () => {
             onUpdate={handleUpdateNote}
             onDelete={handleDeleteNote}
             initialEditMode={modalInitialEditMode}
+            onOpenNote={(note) => {
+              setSelectedNote(note);
+              setIsCreatingNewNote(false);
+              setModalInitialEditMode(false);
+            }}
           />
         )}
       </div>

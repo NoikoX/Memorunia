@@ -16,7 +16,7 @@ interface NoteModalProps {
   initialEditMode?: boolean;
 }
 
-export const NoteModal: React.FC<NoteModalProps> = ({ note, allNotes, onClose, onUpdate, onDelete, initialEditMode = false }) => {
+export const NoteModal: React.FC<NoteModalProps> = ({ note, allNotes, onClose, onUpdate, onDelete, initialEditMode = false, onOpenNote }) => {
   const [isEditing, setIsEditing] = useState(initialEditMode);
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('');
@@ -287,6 +287,11 @@ export const NoteModal: React.FC<NoteModalProps> = ({ note, allNotes, onClose, o
                {relatedNotes.map(rel => (
                  <div 
                    key={rel.id} 
+                   onClick={() => {
+                     if (onOpenNote) {
+                       onOpenNote(rel);
+                     }
+                   }}
                    className="bg-white p-3 rounded-lg border border-slate-200 hover:border-indigo-300 hover:shadow-sm cursor-pointer transition-all group"
                  >
                     <h4 className="font-medium text-slate-800 text-sm truncate group-hover:text-indigo-600 mb-1">{rel.title}</h4>

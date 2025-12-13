@@ -38,6 +38,7 @@ export interface ChatMessage {
   toolCalls?: ToolCallLog[];
   toolResults?: ToolResultLog[];
   isAudioPlaying?: boolean;
+  sourceNoteIds?: string[]; // Note IDs that were used as sources in the answer
 }
 
 export enum AppView {

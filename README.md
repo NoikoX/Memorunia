@@ -1,4 +1,4 @@
-# 🧠 MemoGraph Lite
+# 🧠 Memorunia
 ### *Your AI-Powered Second Brain*
 
 > **Built for the Google Gemini Hackathon**  
@@ -10,7 +10,7 @@
 We all suffer from **Digital Amnesia**. We take notes, save snippets, and record voice memos, but we lose them in the void. Keyword search fails because we forget the *exact words* we used.
 
 ## 🚀 The Solution
-**MemoGraph Lite** is a semantic knowledge base. It doesn't just store text; it **understands** it.
+**Memorunia** is a semantic knowledge base. It doesn't just store text; it **understands** it.
 1.  **Voice-First:** Record thoughts naturally.
 2.  **Semantic Search:** Ask "What was that idea about plants?" and it finds the note about "Raspberry Pi waterer" (no keyword match needed).
 3.  **Visual Graph:** Automatically clusters and links related concepts in a beautiful 3D-like web.

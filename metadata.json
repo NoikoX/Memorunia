@@ -1,5 +1,5 @@
 {
-  "name": "MemoGraph Lite",
+  "name": "Memorunia",
   "description": "An AI-powered knowledge base that helps you recall and organize personal notes using semantic search, clustering, and voice interaction.",
   "requestFramePermissions": [
     "microphone"
