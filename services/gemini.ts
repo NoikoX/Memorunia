@@ -1,0 +1,279 @@
+import { GoogleGenAI, Modality, Type, FunctionDeclaration, Tool } from "@google/genai";
+import { Note, Cluster } from '../types';
+import { SYSTEM_INSTRUCTION_RAG } from '../constants';
+
+const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// --- Utilities ---
+
+const cleanJsonString = (str: string): string => {
+  return str.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+};
+
+// --- Agent Tools Definition ---
+
+export const AGENT_TOOLS: Tool[] = [{
+  functionDeclarations: [
+    {
+      name: 'createNote',
+      description: 'Create a new note with a title and content. Returns the new Note ID.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING, description: 'Title of the note' },
+          content: { type: Type.STRING, description: 'The body content of the note' },
+        },
+        required: ['title', 'content']
+      }
+    },
+    {
+      name: 'updateNote',
+      description: 'Update an existing note. Only provide fields that need changing.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          noteId: { type: Type.STRING, description: 'The ID of the note to update' },
+          title: { type: Type.STRING, description: 'New title (optional)' },
+          content: { type: Type.STRING, description: 'New content (optional)' },
+        },
+        required: ['noteId']
+      }
+    },
+    {
+      name: 'deleteNote',
+      description: 'Delete a note by ID. REQUIRE EXPLICIT USER CONFIRMATION BEFORE CALLING THIS.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          noteId: { type: Type.STRING, description: 'The ID of the note to delete' },
+        },
+        required: ['noteId']
+      }
+    },
+    {
+      name: 'searchNotes',
+      description: 'Search for notes semantically. Returns a list of notes with IDs, titles, and snippets.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          query: { type: Type.STRING, description: 'The search query' },
+        },
+        required: ['query']
+      }
+    },
+    {
+      name: 'ragAnswer',
+      description: 'Answer a specific question using a provided list of note IDs as context.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          query: { type: Type.STRING, description: 'The user question' },
+          candidateNoteIds: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING },
+            description: 'List of Note IDs to use as source material'
+          },
+        },
+        required: ['query', 'candidateNoteIds']
+      }
+    },
+    {
+      name: 'clusterNotes',
+      description: 'Re-organize all notes into semantic clusters.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          k: { type: Type.NUMBER, description: 'Approximate number of clusters (default 5)' }
+        }
+      }
+    },
+    {
+      name: 'openNote',
+      description: 'Open a specific note in the UI for the user to see.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          noteId: { type: Type.STRING, description: 'The ID of the note to open' }
+        },
+        required: ['noteId']
+      }
+    },
+    {
+      name: 'summarizeNote',
+      description: 'Generate a summary for a specific note.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          noteId: { type: Type.STRING, description: 'The ID of the note to summarize' }
+        },
+        required: ['noteId']
+      }
+    },
+    {
+      name: 'rewriteNote',
+      description: 'Rewrite or improve a note based on an instruction (e.g. "fix grammar", "make concise").',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          noteId: { type: Type.STRING, description: 'The ID of the note to rewrite' },
+          instruction: { type: Type.STRING, description: 'What to do (e.g. "make it professional")' }
+        },
+        required: ['noteId', 'instruction']
+      }
+    }
+  ]
+}];
+
+export const AGENT_SYSTEM_INSTRUCTION = `
+You are MemoGraph, an intelligent and creative knowledge assistant.
+You manage the user's personal notes.
+
+Capabilities:
+1. You can Create, Update, Delete, Search, and Organize notes using tools.
+2. You can Answer questions based on notes using 'ragAnswer'.
+
+Rules:
+- **Content Generation**: If the user asks to create a note about a topic (e.g., "Create a note with a Shawarma recipe") but does NOT provide the exact text, **YOU MUST GENERATE** high-quality, detailed content for that topic using your own knowledge, and then call 'createNote' with that generated content. Do not ask the user to provide the text if they asked you to create the note about a known topic.
+- ALWAYS 'searchNotes' first if you need to find a note to Update, Delete, or Answer from.
+- Ambiguity: If 'searchNotes' returns multiple similar results, ASK the user to clarify which one they mean.
+- Safety: BEFORE calling 'deleteNote', you MUST ask the user for confirmation (e.g., "Are you sure you want to delete 'Grocery List'?"). Only proceed if they say "yes".
+- Privacy: Do not invent information when answering questions *about existing notes*. If a note isn't found, say so.
+- Be concise, friendly, and helpful.
+`;
+
+// --- Embeddings ---
+
+export const generateEmbedding = async (text: string): Promise<number[]> => {
+  const ai = getAI();
+  try {
+    const response = await ai.models.embedContent({
+      model: "text-embedding-004",
+      contents: { parts: [{ text }] },
+    });
+    // @ts-ignore - The property name is embeddings in the installed version despite type definition mismatch in some environments
+    return response.embeddings?.[0]?.values || [];
+  } catch (e) {
+    console.error("Embedding error:", e);
+    return [];
+  }
+};
+
+export const cosineSimilarity = (vecA: number[], vecB: number[]): number => {
+  if (!vecA || !vecB || vecA.length !== vecB.length || vecA.length === 0) return 0;
+  
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+};
+
+// --- RAG Helper (Used by Agent Tool) ---
+
+export const generateAnswer = async (query: string, contextNotes: Note[]): Promise<{ answer: string, usedNoteIds: string[] }> => {
+  const ai = getAI();
+  const contextText = contextNotes.map(n => `ID: ${n.id}\nTitle: ${n.title}\nContent: ${n.content}`).join("\n\n---\n\n");
+  
+  const prompt = `
+  Question: "${query}"
+  Context:
+  ${contextText}
+  
+  Answer the question using the context. Cite sources by ID or Title.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+    });
+    return {
+      answer: response.text || "No answer generated.",
+      usedNoteIds: contextNotes.map(n => n.id)
+    };
+  } catch (e) {
+    return { answer: "Error generating answer.", usedNoteIds: [] };
+  }
+};
+
+// --- Clustering Helper (Used by Agent Tool) ---
+
+export const generateClusters = async (notes: Note[]): Promise<Cluster[]> => {
+  if (notes.length === 0) return [];
+  const ai = getAI();
+  const notesData = notes.map(n => ({ id: n.id, content: `${n.title}: ${n.content.slice(0, 100)}` }));
+
+  const prompt = `Group these notes into clusters. Return JSON: [{ "name": "...", "noteIds": ["..."] }]`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        { role: 'user', parts: [{ text: JSON.stringify(notesData) }] },
+        { role: 'user', parts: [{ text: prompt }] }
+      ],
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              noteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
+            }
+          }
+        }
+      }
+    });
+
+    const cleanText = cleanJsonString(response.text || "[]");
+    const rawClusters = JSON.parse(cleanText);
+    return rawClusters.map((c: any, idx: number) => ({
+      id: `cluster-${idx}-${Date.now()}`,
+      name: c.name,
+      noteIds: c.noteIds
+    }));
+  } catch (e) {
+    return [];
+  }
+};
+
+// --- Smart Edit Helper (Used by Agent Tool) ---
+
+export const editNoteContent = async (currentContent: string, instruction: string): Promise<string> => {
+  const ai = getAI();
+  const prompt = `Rewrite this text based on instruction: "${instruction}"\n\nText:\n${currentContent}`;
+  try {
+    const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+    return response.text || currentContent;
+  } catch (e) {
+    return currentContent;
+  }
+};
+
+// --- TTS ---
+
+export const generateSpeech = async (text: string): Promise<string | null> => {
+  const ai = getAI();
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+      },
+    });
+    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
+  } catch (e) {
+    return null;
+  }
+};
