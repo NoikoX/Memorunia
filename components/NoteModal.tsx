@@ -49,24 +49,59 @@ export const NoteModal: React.FC<NoteModalProps> = ({ note, allNotes, onClose, o
       } else {
         setRelatedNotes([]);
       }
+    } else {
+      // New note mode
+      setContent('');
+      setTitle('');
+      setIsEditing(true); // Always start in edit mode for new notes
+      setAiPrompt('');
+      setRelatedNotes([]);
     }
   }, [note, allNotes, initialEditMode]);
 
   const handleSave = async () => {
-    if (!note) return;
+    // Validate that at least title or content is provided
+    if (!title.trim() && !content.trim()) {
+      alert('Please provide at least a title or content for the note.');
+      return;
+    }
+    
+    // For new notes (note is null), create a new note object
+    const noteToUpdate = note || {
+      id: '',
+      title: '',
+      content: '',
+      createdAt: Date.now()
+    };
+    
     await onUpdate({
-      ...note,
-      title: title || "Untitled Note",
-      content
+      ...noteToUpdate,
+      title: title.trim() || "Untitled Note",
+      content: content.trim()
     });
-    // If it was a new note (negative ID or special flag), close it, otherwise exit edit mode
-    setIsEditing(false);
+    // If it was a new note, close it, otherwise exit edit mode
+    if (!note) {
+      // New note was created, close modal
+      onClose();
+    } else {
+      setIsEditing(false);
+    }
   };
 
   const handleDelete = () => {
     if (note && window.confirm('Are you sure you want to delete this note?')) {
       onDelete(note.id);
       onClose();
+    }
+  };
+  
+  const handleCancel = () => {
+    if (!note) {
+      // For new notes, just close without saving
+      onClose();
+    } else {
+      // For existing notes, exit edit mode
+      setIsEditing(false);
     }
   };
 
@@ -88,7 +123,7 @@ export const NoteModal: React.FC<NoteModalProps> = ({ note, allNotes, onClose, o
     });
   };
 
-  if (!note) return null;
+  // Allow modal to show even when note is null (for creating new notes)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm transition-all" onClick={onClose}>
@@ -109,34 +144,46 @@ export const NoteModal: React.FC<NoteModalProps> = ({ note, allNotes, onClose, o
                 autoFocus
               />
             ) : (
-              <h2 className="text-2xl font-bold text-slate-800 leading-tight">{note.title}</h2>
+              <h2 className="text-2xl font-bold text-slate-800 leading-tight">{note?.title || 'New Note'}</h2>
             )}
             
-            <div className="flex items-center gap-4 mt-2 text-sm text-slate-400">
-              <span className="flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5" />
-                {new Date(note.createdAt).toLocaleString(undefined, {
-                  dateStyle: 'medium',
-                  timeStyle: 'short'
-                })}
-              </span>
-              {note.isGenerated && (
-                <span className="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full text-xs font-medium">
-                  AI Generated
+            {note && (
+              <div className="flex items-center gap-4 mt-2 text-sm text-slate-400">
+                <span className="flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5" />
+                  {new Date(note.createdAt).toLocaleString(undefined, {
+                    dateStyle: 'medium',
+                    timeStyle: 'short'
+                  })}
                 </span>
-              )}
-            </div>
+                {note.isGenerated && (
+                  <span className="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full text-xs font-medium">
+                    AI Generated
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           
           <div className="flex items-center gap-2">
             {isEditing ? (
-              <button 
-                onClick={handleSave}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
-              >
-                <Save className="w-4 h-4" />
-                Save
-              </button>
+              <>
+                <button 
+                  onClick={handleSave}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+                >
+                  <Save className="w-4 h-4" />
+                  Save
+                </button>
+                {!note && (
+                  <button 
+                    onClick={handleCancel}
+                    className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors font-medium"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </>
             ) : (
               <button 
                 onClick={() => setIsEditing(true)}
@@ -147,13 +194,15 @@ export const NoteModal: React.FC<NoteModalProps> = ({ note, allNotes, onClose, o
               </button>
             )}
             
-            <button 
-              onClick={handleDelete}
-              className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-600 transition-colors"
-              title="Delete Note"
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
+            {note && (
+              <button 
+                onClick={handleDelete}
+                className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-600 transition-colors"
+                title="Delete Note"
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            )}
 
             <button 
               onClick={onClose}

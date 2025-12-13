@@ -48,9 +48,11 @@ const App: React.FC = () => {
   // Note Modal State
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
   const [modalInitialEditMode, setModalInitialEditMode] = useState(false);
+  const [isCreatingNewNote, setIsCreatingNewNote] = useState(false);
 
   // Note Input State
   const [inputMode, setInputMode] = useState<'text' | 'voice'>('text');
+  const [newNoteTitle, setNewNoteTitle] = useState('');
   const [newNoteContent, setNewNoteContent] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [recognitionTranscript, setRecognitionTranscript] = useState('');
@@ -140,9 +142,11 @@ const App: React.FC = () => {
     setIsProcessing(false);
   };
 
-  const handleAddNote = async (contentOverride?: string) => {
+  const handleAddNote = async (contentOverride?: string, titleOverride?: string) => {
     const textToUse = contentOverride || newNoteContent;
-    if (!textToUse.trim()) return;
+    const titleToUse = titleOverride || newNoteTitle;
+    
+    if (!textToUse.trim() && !titleToUse.trim()) return;
 
     // 2. Instant Voice Off logic
     if (isListening) {
@@ -152,19 +156,22 @@ const App: React.FC = () => {
     }
 
     setIsProcessing(true);
-    const title = textToUse.split(' ').slice(0, 5).join(' ') + '...';
-    const textToEmbed = `Title: ${title}\nContent: ${textToUse}`;
+    // Use provided title, or generate from content, or use "Untitled Note"
+    const title = titleToUse.trim() || (textToUse.trim() ? textToUse.split(' ').slice(0, 5).join(' ') + '...' : 'Untitled Note');
+    const content = textToUse.trim() || '';
+    const textToEmbed = `Title: ${title}\nContent: ${content}`;
     const embedding = await generateEmbedding(textToEmbed);
     
     const newNote: Note = {
       id: uuidv4(),
       title,
-      content: textToUse,
+      content,
       createdAt: Date.now(),
       embedding
     };
 
     setNotes(prev => [newNote, ...prev]);
+    setNewNoteTitle('');
     setNewNoteContent('');
     setIsProcessing(false);
   };
@@ -183,12 +190,16 @@ const App: React.FC = () => {
     else setNotes(prev => prev.map(n => n.id === finalNote.id ? finalNote : n));
     
     setSelectedNote(null);
+    setIsCreatingNewNote(false);
     setIsProcessing(false);
   };
 
   const handleDeleteNote = (id: string) => {
     setNotes(prev => prev.filter(n => n.id !== id));
-    if (selectedNote?.id === id) setSelectedNote(null);
+    if (selectedNote?.id === id) {
+      setSelectedNote(null);
+      setIsCreatingNewNote(false);
+    }
   };
 
   const toggleListening = (mode: 'voice' | 'search') => {
@@ -583,7 +594,11 @@ const App: React.FC = () => {
                   clusters={clusters} 
                   onNodeClick={(id) => {
                     const n = notes.find(x => x.id === id);
-                    if (n) { setSelectedNote(n); setModalInitialEditMode(false); }
+                    if (n) { 
+                      setSelectedNote(n); 
+                      setIsCreatingNewNote(false);
+                      setModalInitialEditMode(false); 
+                    }
                   }} 
               />
             </div>
@@ -597,22 +612,54 @@ const App: React.FC = () => {
                   </div>
                   <h2 className="text-2xl font-bold text-slate-800 mb-2">Welcome to MemoGraph</h2>
                   <p className="text-slate-500 mb-6">Start by adding a note or load the demo.</p>
-                  <button onClick={handleLoadDemo} className="bg-white border border-slate-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50">
-                    <Database className="w-4 h-4 inline mr-2" />
-                    Load Demo Data
-                  </button>
+                  <div className="flex items-center justify-center gap-3">
+                    <button 
+                      onClick={() => { 
+                        setSelectedNote(null); 
+                        setIsCreatingNewNote(true);
+                        setModalInitialEditMode(true); 
+                      }}
+                      className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+                    >
+                      <Plus className="w-4 h-4 inline mr-2" />
+                      Create Note
+                    </button>
+                    <button onClick={handleLoadDemo} className="bg-white border border-slate-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50">
+                      <Database className="w-4 h-4 inline mr-2" />
+                      Load Demo Data
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <>
+                  <div className="mb-4 flex justify-end">
+                    <button 
+                      onClick={() => { 
+                        setSelectedNote(null); 
+                        setIsCreatingNewNote(true);
+                        setModalInitialEditMode(true); 
+                      }}
+                      className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm"
+                    >
+                      <Plus className="w-4 h-4" />
+                      New Note
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {sorted.map(note => (
                     <NoteCard 
                       key={note.id} 
                       note={note} 
-                      onClick={() => { setSelectedNote(note); setModalInitialEditMode(false); }}
+                      onClick={() => { 
+                        setSelectedNote(note); 
+                        setIsCreatingNewNote(false);
+                        setModalInitialEditMode(false); 
+                      }}
                       onDelete={handleDeleteNote}
                     />
                   ))}
-                </div>
+                  </div>
+                </>
               )}
             </>
           )}
@@ -621,14 +668,37 @@ const App: React.FC = () => {
 
       {/* Bottom Bar: Add Note (Only in Notes/Graph View) */}
       <div className="bg-white border-t border-slate-200 p-4 sticky bottom-0 z-20">
-          <div className="max-w-3xl mx-auto bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-lg flex flex-col">
+          <div className="max-w-3xl mx-auto bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-lg flex flex-col gap-2">
+            <div className="flex items-center gap-2 px-2">
+              <input
+                type="text"
+                value={newNoteTitle}
+                onChange={(e) => setNewNoteTitle(e.target.value)}
+                placeholder="Note title (optional)..."
+                className="flex-1 bg-transparent border-none focus:ring-0 text-sm font-medium h-8 py-1 px-2 text-slate-700"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    const content = isListening && inputMode === 'voice' ? recognitionTranscript : newNoteContent;
+                    handleAddNote(content, newNoteTitle);
+                  }
+                }}
+              />
+            </div>
             <div className="flex items-center gap-2 p-2">
               <div className="flex-1">
                 <textarea 
                   value={newNoteContent}
                   onChange={(e) => setNewNoteContent(e.target.value)}
-                  placeholder={inputMode === 'voice' && isListening ? "Listening..." : "Type a note..."}
+                  placeholder={inputMode === 'voice' && isListening ? "Listening..." : "Type note content..."}
                   className="w-full bg-transparent border-none focus:ring-0 text-sm resize-none h-10 py-2 px-2"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && e.ctrlKey) {
+                      e.preventDefault();
+                      const content = isListening && inputMode === 'voice' ? recognitionTranscript : newNoteContent;
+                      handleAddNote(content, newNoteTitle);
+                    }
+                  }}
                 />
               </div>
               <button 
@@ -650,9 +720,50 @@ const App: React.FC = () => {
                 multiple 
                 accept=".txt,.md" 
                 className="hidden" 
-                onChange={(e) => {
-                   // Reuse file upload logic
-                   if (e.target.files) { /* simple inline reuse or call existing handler */ }
+                onChange={async (e) => {
+                   if (!e.target.files || e.target.files.length === 0) return;
+                   
+                   setIsProcessing(true);
+                   const files = Array.from(e.target.files);
+                   
+                   for (const file of files) {
+                     try {
+                       const text = await file.text();
+                       if (text.trim()) {
+                         // Use filename (without extension) as title, or first line if it looks like a title
+                         const fileName = file.name.replace(/\.(txt|md)$/i, '');
+                         const lines = text.split('\n');
+                         const firstLine = lines[0]?.trim() || '';
+                         // If first line is short and looks like a title, use it; otherwise use filename
+                         const title = (firstLine.length < 60 && firstLine.length > 0) 
+                           ? firstLine 
+                           : fileName || 'Imported Note';
+                         const content = (firstLine.length < 60 && firstLine === title) 
+                           ? lines.slice(1).join('\n').trim() || text.trim()
+                           : text.trim();
+                         
+                         const textToEmbed = `Title: ${title}\nContent: ${content}`;
+                         const embedding = await generateEmbedding(textToEmbed);
+                         
+                         const newNote: Note = {
+                           id: uuidv4(),
+                           title,
+                           content,
+                           createdAt: Date.now(),
+                           embedding
+                         };
+                         
+                         setNotes(prev => [newNote, ...prev]);
+                       }
+                     } catch (error) {
+                       console.error(`Error reading file ${file.name}:`, error);
+                       alert(`Failed to read file: ${file.name}`);
+                     }
+                   }
+                   
+                   // Reset file input
+                   e.target.value = '';
+                   setIsProcessing(false);
                 }}
               />
               <button 
@@ -667,9 +778,9 @@ const App: React.FC = () => {
               <button 
                 onClick={() => {
                     const content = isListening && inputMode === 'voice' ? recognitionTranscript : newNoteContent;
-                    handleAddNote(content);
+                    handleAddNote(content, newNoteTitle);
                 }}
-                disabled={(!newNoteContent.trim() && !isListening) || isProcessing}
+                disabled={(!newNoteContent.trim() && !newNoteTitle.trim() && !isListening) || isProcessing}
                 className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 text-sm font-medium"
               >
                 <Plus className="w-4 h-4" />
@@ -697,14 +808,19 @@ const App: React.FC = () => {
       <div className="flex-1 flex flex-col h-full overflow-hidden relative">
         {view === AppView.AGENT ? renderAgentChat() : renderNotesOrGraph()}
         
-        <NoteModal 
-          note={selectedNote} 
-          allNotes={notes}
-          onClose={() => setSelectedNote(null)} 
-          onUpdate={handleUpdateNote}
-          onDelete={handleDeleteNote}
-          initialEditMode={modalInitialEditMode}
-        />
+        {(selectedNote !== null || isCreatingNewNote) && (
+          <NoteModal 
+            note={selectedNote} 
+            allNotes={notes}
+            onClose={() => {
+              setSelectedNote(null);
+              setIsCreatingNewNote(false);
+            }} 
+            onUpdate={handleUpdateNote}
+            onDelete={handleDeleteNote}
+            initialEditMode={modalInitialEditMode}
+          />
+        )}
       </div>
     </div>
   );
