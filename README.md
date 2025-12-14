@@ -63,6 +63,28 @@ We chose **pure semantic search** for several reasons:
 
 #### 2. **RAG (Retrieval Augmented Generation)**
 
+
+# Rubics Cube notes example:
+![](./images/rubik1.png)
+
+![](./images/rubiks2.png)
+
+### These are the formulas for solving the Rubik's cube which I was learning a long long ago and even forgot about it
+
+
+
+# Anime watchlist example:
+![](./images/anime1.png)
+
+![](./images/anime2.png)
+
+### As you can see, there are lots of options:
+- Summarize note
+- Fix grammar
+- Make it professional
+- Shorten
+- Make bullet points
+
 **How It Works:**
 1. User asks a question → Agent uses `searchNotes` tool to find relevant notes via semantic search
 2. Relevant notes (with high similarity scores) are retrieved
@@ -77,6 +99,8 @@ We chose **pure semantic search** for several reasons:
 - Handles complex queries that require multiple notes
 
 #### 3. **Fully Agentic Workflow**
+
+![](./images/agentic.png)
 
 Memorunia implements a **fully autonomous AI agent** using Gemini's function calling capabilities. The agent can:
 
@@ -96,6 +120,18 @@ Memorunia implements a **fully autonomous AI agent** using Gemini's function cal
 - Reduces cognitive load: Users don't need to manually organize or format
 
 #### 4. **Intelligent Note Clustering**
+
+## Example:
+
+![](./images/clustering.png)
+> as you can see these clusters are pretty useful
+
+![](./images/clusterss.png)
+
+## This is how memory graph looks like, which I think is pretty cool:
+
+![](./images/clustering2.png)
+
 
 **How It Works:**
 - Uses the same embedding system to calculate similarity between all notes
