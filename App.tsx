@@ -26,6 +26,14 @@ import { Sidebar } from './components/Sidebar';
 import { NoteCard } from './components/NoteCard';
 import { GraphView } from './components/GraphView';
 import { NoteModal } from './components/NoteModal';
+import { 
+  loadGoogleAPI, 
+  signIn, 
+  signOut, 
+  checkAuthStatus, 
+  createCalendarEvent, 
+  getUserEmail 
+} from './services/calendar';
 
 const App: React.FC = () => {
   // --- State ---
@@ -62,6 +70,10 @@ const App: React.FC = () => {
   const notesRef = useRef<Note[]>(notes); 
   const chatHistoryRef = useRef<ChatMessage[]>(chatHistory);
 
+  // Calendar Auth State
+  const [isCalendarSignedIn, setIsCalendarSignedIn] = useState(false);
+  const [calendarEmail, setCalendarEmail] = useState<string | null>(null);
+
   // Refs
   const recognitionRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -77,6 +89,17 @@ const App: React.FC = () => {
         notesRef.current = parsed;
     }
     if (savedClusters) setClusters(JSON.parse(savedClusters));
+
+    // Initialize Google Calendar API
+    loadGoogleAPI().then(() => {
+      const signedIn = checkAuthStatus();
+      setIsCalendarSignedIn(signedIn);
+      if (signedIn) {
+        setCalendarEmail(getUserEmail());
+      }
+    }).catch(err => {
+      console.error('Failed to load Google API:', err);
+    });
 
     // Speech Setup
     if ('webkitSpeechRecognition' in window) {
@@ -259,20 +282,29 @@ const App: React.FC = () => {
       case 'searchNotes': {
         const { query } = args;
         const queryEmb = await generateEmbedding(query);
-        const results = currentNotes.map(n => ({
+        const allResults = currentNotes.map(n => ({
           id: n.id,
           title: n.title,
           snippet: n.content.slice(0, 150),
           score: n.embedding ? cosineSimilarity(queryEmb, n.embedding) : 0
-        })).sort((a, b) => b.score - a.score).filter(n => n.score > 0.05).slice(0, 5); // Return top 5
+        })).sort((a, b) => b.score - a.score);
         
-        // Add relevance information to help agent decide which notes to use
-        const relevantResults = results.filter(r => r.score > 0.3);
+        // Only return highly relevant results (score > 0.4) or top 3 if none meet threshold
+        const highlyRelevant = allResults.filter(r => r.score > 0.4);
+        const results = highlyRelevant.length > 0 
+          ? highlyRelevant.slice(0, 5) // Max 5 highly relevant
+          : allResults.filter(r => r.score > 0.2).slice(0, 3); // Fallback: top 3 if no high relevance
+        
+        // Count truly relevant (score > 0.45 for "related" classification)
+        const trulyRelevant = allResults.filter(r => r.score > 0.45);
+        
         return { 
           results,
-          message: relevantResults.length > 0 
-            ? `Found ${results.length} notes. ${relevantResults.length} are highly relevant (score > 0.3). Use these note IDs with 'ragAnswer' for best results.`
-            : `Found ${results.length} notes, but none are highly relevant. Consider refining your search query.`
+          message: trulyRelevant.length > 0
+            ? `Found ${trulyRelevant.length} note${trulyRelevant.length === 1 ? '' : 's'} that ${trulyRelevant.length === 1 ? 'is' : 'are'} highly relevant to your query. ${results.length > trulyRelevant.length ? `Showing ${results.length} total results for context.` : ''}`
+            : results.length > 0
+            ? `Found ${results.length} note${results.length === 1 ? '' : 's'} with some relevance, but none are highly relevant. Consider refining your search query.`
+            : `No relevant notes found. Try a different search query.`
         };
       }
 
@@ -341,6 +373,52 @@ const App: React.FC = () => {
         updated.embedding = await generateEmbedding(`Title: ${updated.title}\nContent: ${newText}`);
         setNotes(prev => prev.map(n => n.id === noteId ? updated : n));
         return { success: true, message: "Note rewritten and saved." };
+      }
+
+      case 'createCalendarEvent': {
+        const { text } = args;
+        if (!text || !text.trim()) {
+          return { error: "Event text is required." };
+        }
+        
+        try {
+          // Ensure Google API is loaded
+          await loadGoogleAPI();
+          
+          // Check if user is signed in
+          if (!checkAuthStatus()) {
+            // Try to sign in automatically
+            const signedIn = await signIn();
+            if (!signedIn) {
+              return { 
+                error: "Please sign in to Google Calendar first. The user needs to authorize calendar access.",
+                requiresAuth: true
+              };
+            }
+            setIsCalendarSignedIn(true);
+            setCalendarEmail(getUserEmail());
+          }
+          
+          // Create the event
+          const result = await createCalendarEvent(text.trim());
+          
+          if (result.success) {
+            return { 
+              success: true, 
+              eventId: result.eventId,
+              message: `Calendar event created successfully: "${text}"`
+            };
+          } else {
+            return { 
+              error: result.error || "Failed to create calendar event." 
+            };
+          }
+        } catch (error: any) {
+          console.error("Calendar event creation error:", error);
+          return { 
+            error: error.message || "An error occurred while creating the calendar event." 
+          };
+        }
       }
 
       default:
@@ -432,12 +510,27 @@ const App: React.FC = () => {
              }
              // If searchNotes was called and no ragAnswer, use search results as sources
              else if (call.name === 'searchNotes' && result?.results && !sourceNoteIds) {
-               // Only use highly relevant results (score > 0.3) as sources
-               const highRelevanceNoteIds = result.results
-                 .filter((r: any) => r.score > 0.3)
-                 .map((r: any) => r.id);
-               if (highRelevanceNoteIds.length > 0) {
-                 sourceNoteIds = highRelevanceNoteIds;
+               // Only use highly relevant results (score > 0.5) or top 2 most relevant
+               // This ensures we only show truly relevant sources, not barely related ones
+               const scoredResults = result.results
+                 .filter((r: any) => r.score > 0.5) // High threshold - only truly relevant
+                 .sort((a: any, b: any) => b.score - a.score); // Sort by relevance
+               
+               // If we have high-relevance results, use those; otherwise use top 2
+               let finalResults = scoredResults;
+               if (finalResults.length === 0 && result.results.length > 0) {
+                 // If no high-relevance, take top 2 most relevant (even if below 0.5)
+                 finalResults = [...result.results]
+                   .sort((a: any, b: any) => b.score - a.score)
+                   .slice(0, 2);
+                 // Only use if the top result has decent relevance (at least 0.35)
+                 if (finalResults.length > 0 && finalResults[0].score < 0.35) {
+                   finalResults = []; // Don't show sources if relevance is too low
+                 }
+               }
+               
+               if (finalResults.length > 0) {
+                 sourceNoteIds = finalResults.map((r: any) => r.id);
                }
              }
              
@@ -894,6 +987,33 @@ const App: React.FC = () => {
         isOrganizing={isProcessing}
         currentView={view}
         onChangeView={setView}
+        isCalendarSignedIn={isCalendarSignedIn}
+        calendarEmail={calendarEmail}
+        onCalendarSignIn={async () => {
+          try {
+            console.log('Starting calendar sign-in...');
+            await loadGoogleAPI();
+            console.log('Google API loaded, attempting sign-in...');
+            const signedIn = await signIn();
+            if (signedIn) {
+              setIsCalendarSignedIn(true);
+              setCalendarEmail(getUserEmail());
+              console.log('✅ Calendar connected successfully!');
+            }
+          } catch (error: any) {
+            console.error('Calendar sign-in error:', error);
+            console.error('Full error object:', error);
+            
+            // Show detailed error message
+            const errorMsg = error.message || error.toString() || 'Unknown error';
+            alert(`Failed to connect to Google Calendar:\n\n${errorMsg}\n\nCheck the browser console for more details.`);
+          }
+        }}
+        onCalendarSignOut={async () => {
+          await signOut();
+          setIsCalendarSignedIn(false);
+          setCalendarEmail(null);
+        }}
       />
       
       <div className="flex-1 flex flex-col h-full overflow-hidden relative">

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Cluster, AppView } from '../types';
-import { LayoutGrid, Network, Sparkles, FolderOpen, List, Bot } from 'lucide-react';
+import { LayoutGrid, Network, Sparkles, FolderOpen, List, Bot, Calendar, LogOut } from 'lucide-react';
 
 interface SidebarProps {
   clusters: Cluster[];
@@ -10,6 +10,10 @@ interface SidebarProps {
   isOrganizing: boolean;
   currentView: AppView;
   onChangeView: (view: AppView) => void;
+  isCalendarSignedIn?: boolean;
+  calendarEmail?: string | null;
+  onCalendarSignIn?: () => void;
+  onCalendarSignOut?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -19,7 +23,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOrganize, 
   isOrganizing,
   currentView,
-  onChangeView
+  onChangeView,
+  isCalendarSignedIn = false,
+  calendarEmail = null,
+  onCalendarSignIn,
+  onCalendarSignOut
 }) => {
   return (
     <div className="w-64 bg-slate-900 text-white flex flex-col h-full border-r border-slate-800 shrink-0 transition-all duration-300">
@@ -98,7 +106,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      <div className="mt-auto p-4 border-t border-slate-800">
+      <div className="mt-auto p-4 border-t border-slate-800 space-y-2">
+        {/* Calendar Auth */}
+        {isCalendarSignedIn ? (
+          <div className="mb-2 p-2 bg-slate-800 rounded-lg">
+            <div className="flex items-center gap-2 text-xs text-slate-300 mb-2">
+              <Calendar className="w-3 h-3" />
+              <span className="truncate">{calendarEmail || 'Calendar Connected'}</span>
+            </div>
+            {onCalendarSignOut && (
+              <button
+                onClick={onCalendarSignOut}
+                className="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors"
+              >
+                <LogOut className="w-3 h-3" />
+                Sign Out
+              </button>
+            )}
+          </div>
+        ) : (
+          onCalendarSignIn && (
+            <button
+              onClick={onCalendarSignIn}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              <Calendar className="w-4 h-4" />
+              Connect Calendar
+            </button>
+          )
+        )}
+        
         <button
           onClick={onOrganize}
           disabled={isOrganizing}

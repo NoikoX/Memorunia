@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
       // This is crucial: The @google/genai SDK expects process.env.API_KEY
       // Vite normally hides process.env, so we explicitly define it here.
       'process.env.API_KEY': JSON.stringify(env.API_KEY),
+      'process.env.GOOGLE_CLIENT_ID': JSON.stringify(env.GOOGLE_CLIENT_ID),
     },
   };
 });

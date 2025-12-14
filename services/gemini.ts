@@ -52,7 +52,7 @@ export const AGENT_TOOLS: Tool[] = [{
     },
     {
       name: 'searchNotes',
-      description: 'Search for notes semantically using embeddings. Returns a list of notes with IDs, titles, snippets, and relevance scores. Notes with score > 0.3 are considered highly relevant.',
+      description: 'Search for notes semantically using embeddings. Returns only highly relevant notes (score > 0.4) or top 3 most relevant. When reporting results, only count notes with score > 0.45 as "related" or "relevant" to the query. Notes with lower scores should not be mentioned as related.',
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -120,6 +120,20 @@ export const AGENT_TOOLS: Tool[] = [{
         },
         required: ['noteId', 'instruction']
       }
+    },
+    {
+      name: 'createCalendarEvent',
+      description: 'Create a calendar event in the user\'s Google Calendar using natural language. The text parameter should include the event details like "Meeting with John tomorrow at 2pm" or "Dentist appointment on March 15 at 10am".',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          text: { 
+            type: Type.STRING, 
+            description: 'Natural language description of the event including date/time. Example: "Team meeting tomorrow at 3pm" or "Doctor appointment on March 20 at 2:30pm"' 
+          }
+        },
+        required: ['text']
+      }
     }
   ]
 }];
@@ -137,12 +151,15 @@ Rules:
 - ALWAYS 'searchNotes' first if you need to find a note to Update, Delete, or Answer from.
 - **Answering Questions**: When answering questions:
   1. First use 'searchNotes' to find relevant notes
-  2. Then use 'ragAnswer' with the note IDs from search results
-  3. The 'ragAnswer' tool will automatically filter to only highly relevant notes
-  4. Always cite sources in your response, but ONLY cite notes that were actually used and are truly relevant
+  2. The search results will only include highly relevant notes (score > 0.4)
+  3. When reporting how many notes you found, ONLY count notes that are truly relevant (the search tool will indicate this)
+  4. Then use 'ragAnswer' with the note IDs from search results
+  5. The 'ragAnswer' tool will automatically filter to only highly relevant notes
+  6. Always cite sources in your response, but ONLY cite notes that were actually used and are truly relevant
 - Ambiguity: If 'searchNotes' returns multiple similar results, ASK the user to clarify which one they mean.
 - Safety: BEFORE calling 'deleteNote', you MUST ask the user for confirmation (e.g., "Are you sure you want to delete 'Grocery List'?"). Only proceed if they say "yes".
 - Privacy: Do not invent information when answering questions *about existing notes*. If a note isn't found, say so.
+- **Calendar Events**: When the user asks to create a calendar event, reminder, or schedule something, use 'createCalendarEvent' with natural language text that includes the event description and date/time. Example: "Team meeting tomorrow at 3pm" or "Doctor appointment on March 20 at 2:30pm".
 - Be concise, friendly, and helpful.
 `;
 
